@@ -1,0 +1,16 @@
+{
+  "number_of_test_cases": 2,
+  "test_cases": [
+    {
+      "case_id": 1,
+      "input": "2",
+      "expected_output": "0 1"
+    },
+    {
+      "case_id": 2,
+      "input": "5",
+      "expected_output": "0 1 1 2 3"
+    }
+  ]
+}
+
