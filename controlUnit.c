@@ -7,7 +7,7 @@
 #include <gtk/gtk.h>
 #include <glib.h>
 
-int inputfd[2],outputfd[2];
+int inputfd[2], outputfd[2];
 
 GtkWidget *text_view;
 GtkWidget *output_view;
@@ -15,9 +15,8 @@ GtkWidget *question_view;
 GtkWidget *custom_output_text_view;
 GtkWidget *custom_output_checkbox;
 
-void store_input_file(char* input){
-	//printf("FIle input : %s\n",input);
-    FILE *file = fopen("output_program.c", "w");
+void store_input_file(char* input) {
+    FILE *file = fopen("userInput.c", "w");
     if (file == NULL) {
         g_print("Error opening file!\n");
         return;
@@ -30,7 +29,7 @@ void compile() {
     int output_pipe[2]; // Pipe for standard output
     int error_pipe[2];  // Pipe for standard error
     pid_t pid;
-    const char *source_file = "userInput.c";
+
     // Create pipes
     if (pipe(output_pipe) == -1 || pipe(error_pipe) == -1) {
         perror("pipe");
@@ -60,7 +59,7 @@ void compile() {
 
         // Execute the command to compile and run the program
         char command[1024];
-        snprintf(command, sizeof(command), "gcc userInput.c -o userInput");
+        snprintf(command, sizeof(command), "rm -f userInput; gcc userInput.c -o userInput; if [ $? -eq 0 ]; then ./userInput; fi");
         execlp("sh", "sh", "-c", command, NULL);
         
         // If execlp fails
@@ -71,35 +70,40 @@ void compile() {
         close(output_pipe[1]);
         close(error_pipe[1]);
 
-        char buffer[1024];
+        char output_buffer[1024] = {0}; // Buffer for output
+        char error_buffer[1024] = {0};  // Buffer for error
         ssize_t bytes_read;
 
         // Read from the output pipe
-        printf("Program Output:\n");
-        while ((bytes_read = read(output_pipe[0], buffer, sizeof(buffer) - 1)) > 0) {
-            buffer[bytes_read] = '\0'; // Null-terminate the string
-            printf("%s", buffer); // Print the received output
+        while ((bytes_read = read(output_pipe[0], output_buffer + strlen(output_buffer), sizeof(output_buffer) - strlen(output_buffer) - 1)) > 0) {
+            // Null-terminate the string
+            output_buffer[bytes_read + strlen(output_buffer)] = '\0'; 
         }
 
         // Read from the error pipe
-        printf("\nCompilation/Runtime Errors:\n");
-        while ((bytes_read = read(error_pipe[0], buffer, sizeof(buffer) - 1)) > 0) {
-            buffer[bytes_read] = '\0'; // Null-terminate the string
-            printf("%s", buffer); // Print the received error messages
+        while ((bytes_read = read(error_pipe[0], error_buffer + strlen(error_buffer), sizeof(error_buffer) - strlen(error_buffer) - 1)) > 0) {
+            // Null-terminate the string
+            error_buffer[bytes_read + strlen(error_buffer)] = '\0'; 
         }
+
+        // Combine output and error messages
+        char combined_output[2048]; // Adjust size as needed
+        snprintf(combined_output, sizeof(combined_output), "%s\n%s", output_buffer, error_buffer);
+        printf("From fn call:\n%s\n",combined_output);
+        // Write combined output to input_fd
+        write(inputfd[1], combined_output, strlen(combined_output));
 
         // Close read ends
         close(output_pipe[0]);
         close(error_pipe[0]);
+        //close(inputfd[1]); // Close the write end of input_fd since done writing
         
         // Wait for the child process to finish
         wait(NULL);
     }
 }
 
-void Run(){
 
-}
 
 
 /*
@@ -219,17 +223,37 @@ void monitor_child(){
             buffer[bytes_read] = '\0'; // Null-terminate the string
             int button_index;
             char *data;
-			printf("Buffer caught: %s\n",buffer);
+			//printf("Buffer caught: %s\n",buffer);
             // Parse the message
-            sscanf(buffer, "%d:%s", &button_index, data);
-            printf("%s\n",data);
+            char *colon_pos = strchr(buffer, ':');
+            char string[1024];
+   
+   	    	// Extract the number before the colon
+        	sscanf(buffer, "%d", &button_index);
+        	int ind = 0;
+        	for(int i = 0;i<strlen(buffer);i++){
+        		if(buffer[i-1]==':'){
+        			int j = i;
+        			char ch=buffer[j];
+        			while(ch!='\0'){
+        				ch= buffer[j++];
+        				string[ind++]=ch; 
+        			}
+        			string[ind] = '\0';
+        			break;
+        		}
+        	}
+        	// Copy everything after the colon (including whitespace)
+        	//strncpy(data, colon_pos + 1, sizeof(data) - 1);
+            //sscanf(buffer, "%d:%s", &button_index, data);
+            //printf("%d clicked\n",button_index);
             // Process the data based on button index
             switch (button_index) {
                 case 0:
-                    store_input_file(data);
+                    store_input_file(string);
                     break;
                 case 1:
-                    printf("Button 2 clicked. Data: %s\n", data);
+                    compile();
                     break;
                 default:
                     printf("Unknown button index.\n");
@@ -283,8 +307,55 @@ void on_save_button_clicked(GtkWidget *widget, gpointer data) {
     
     g_free(input);
 }
+void on_compile_and_run_button_clicked(GtkButton *button, gpointer user_data) {
+    // Ensure that file descriptors are valid before closing
+    if (inputfd[1] != -1) {
+        close(inputfd[1]); // Only close if it hasn't been closed already
+    }
+    if (outputfd[0] != -1) {
+        close(outputfd[0]); // Only close if it hasn't been closed already
+    }
+    
+    int button_index = GPOINTER_TO_INT(user_data);
+    char message[10];
+    snprintf(message, sizeof(message), "%d:%s", button_index, "\0");
+    
+    // Write button index message to output_fd
+    ssize_t bytes_written = write(outputfd[1], message, strlen(message) + 1);
+    if (bytes_written == -1) {
+        perror("write to outputfd failed");
+        return;
+    }
 
-void on_compile_and_run_button_clicked(GtkWidget *widget, gpointer data) {
+    // Prepare to read from input_fd
+    char buffer[2048];  // Buffer for output
+    ssize_t bytes_read;
+    
+    wait(10);
+    // Read from input_fd
+    bytes_read = read(inputfd[0], buffer, sizeof(buffer) - 1);
+    if (bytes_read > 0) {
+        buffer[bytes_read] = '\0'; // Null-terminate the string
+        GtkTextBuffer *text_buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(output_view));
+        gtk_text_buffer_set_text(text_buffer, buffer, -1);
+    } else if (bytes_read == -1) {
+        perror("read from input_fd failed");  // Handle read error
+        GtkTextBuffer *text_buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(output_view));
+        gtk_text_buffer_set_text(text_buffer, "Error reading from input_fd.", -1);
+    } else {
+        GtkTextBuffer *text_buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(output_view));
+        gtk_text_buffer_set_text(text_buffer, "No output received.", -1);
+    }
+
+    // Close the read end of input_fd after usage
+    if (inputfd[0] != -1) {
+        close(inputfd[0]);
+        inputfd[0] = -1; // Set to -1 to avoid closing again
+    }
+}
+
+
+/*void on_compile_and_run_button_clicked(GtkWidget *widget, gpointer data) {
     GError *error = NULL;
     gchar *output = NULL;
     gint exit_status;
@@ -314,6 +385,8 @@ void on_compile_and_run_button_clicked(GtkWidget *widget, gpointer data) {
     gtk_text_buffer_set_text(output_buffer, output ? output : "Program executed successfully, no output.", -1);
     g_free(output);
 }
+*/
+
 
 
 int main(int argc, char* argv[]){
@@ -397,8 +470,8 @@ int main(int argc, char* argv[]){
         GtkWidget *save_button = gtk_button_new_with_label("Save");
         GtkWidget *compile_run_button = gtk_button_new_with_label("Compile and Run");
 
-        g_signal_connect(save_button, "clicked", G_CALLBACK(on_save_button_clicked), NULL);
-        g_signal_connect(compile_run_button, "clicked", G_CALLBACK(on_compile_and_run_button_clicked), NULL);
+        g_signal_connect(save_button, "clicked", G_CALLBACK(on_save_button_clicked), GINT_TO_POINTER(0));
+        g_signal_connect(compile_run_button, "clicked", G_CALLBACK(on_compile_and_run_button_clicked), GINT_TO_POINTER(1));
 
         gtk_box_pack_start(GTK_BOX(button_box), save_button, TRUE, TRUE, 0);
         gtk_box_pack_start(GTK_BOX(button_box), compile_run_button, TRUE, TRUE, 0);
@@ -422,8 +495,6 @@ int main(int argc, char* argv[]){
         close(outputfd[1]);
         monitor_child();
         wait(NULL);
-        
-        
 	}
 	
 	return 0;
