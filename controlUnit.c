@@ -25,13 +25,14 @@ void store_input_file(char* input) {
     fclose(file);
 }
 
-void compile() {
+void compile_and_run(const char *input_value, const char *expected_output) {
     int output_pipe[2]; // Pipe for standard output
     int error_pipe[2];  // Pipe for standard error
+    int input_pipe[2];  // Pipe for standard input
     pid_t pid;
 
     // Create pipes
-    if (pipe(output_pipe) == -1 || pipe(error_pipe) == -1) {
+    if (pipe(output_pipe) == -1 || pipe(error_pipe) == -1 || pipe(input_pipe) == -1) {
         perror("pipe");
         exit(EXIT_FAILURE);
     }
@@ -47,19 +48,25 @@ void compile() {
         // Close read ends of pipes
         close(output_pipe[0]);
         close(error_pipe[0]);
+        close(input_pipe[1]); // Close write end of input pipe
 
         // Redirect stdout to the output pipe
         dup2(output_pipe[1], STDOUT_FILENO);
         // Redirect stderr to the error pipe
         dup2(error_pipe[1], STDERR_FILENO);
-        
+        // Redirect stdin from the input pipe
+        dup2(input_pipe[0], STDIN_FILENO);
+
         // Close the original write ends
         close(output_pipe[1]);
         close(error_pipe[1]);
+        close(input_pipe[0]); // Close the read end of input pipe after dup2
 
         // Execute the command to compile and run the program
         char command[1024];
-        snprintf(command, sizeof(command), "rm -f userInput; gcc userInput.c -o userInput; if [ $? -eq 0 ]; then ./userInput; fi");
+        snprintf(command, sizeof(command), "rm -f userInput; gcc userInput.c -o userInput; ./userInput");
+
+        // Start the command using execlp
         execlp("sh", "sh", "-c", command, NULL);
         
         // If execlp fails
@@ -69,6 +76,12 @@ void compile() {
         // Close write ends of pipes
         close(output_pipe[1]);
         close(error_pipe[1]);
+        close(input_pipe[0]); // Close the read end of input pipe
+
+        // Write the input value to the stdin of the child process
+        write(input_pipe[1], input_value, strlen(input_value));
+        write(input_pipe[1], "\n", 1); // Send newline to signal end of input
+        close(input_pipe[1]); // Close the write end after sending input
 
         char output_buffer[1024] = {0}; // Buffer for output
         char error_buffer[1024] = {0};  // Buffer for error
@@ -89,90 +102,48 @@ void compile() {
         // Combine output and error messages
         char combined_output[2048]; // Adjust size as needed
         snprintf(combined_output, sizeof(combined_output), "%s\n%s", output_buffer, error_buffer);
-        printf("From fn call:\n%s\n",combined_output);
-        // Write combined output to input_fd
-        write(inputfd[1], combined_output, strlen(combined_output));
+       // printf("From fn call:\n%s\n", combined_output);
+
+        // Check the output against expected output
+        if (strncmp(expected_output, output_buffer, strlen(expected_output)) == 0) {
+            printf("Test Case Passed!\n");
+            printf("Your output: %s\n", output_buffer);
+            printf("Expected output: %s\n", expected_output);
+            
+        } else {
+            printf("Test Case Failed!\n");
+            printf("Your output: %s\n", output_buffer);
+            printf("Expected output: %s\n", expected_output);
+        }
 
         // Close read ends
+        write(inputfd[1],combined_output,strlen(combined_output));
+        close(inputfd[1]);
         close(output_pipe[0]);
         close(error_pipe[0]);
-        //close(inputfd[1]); // Close the write end of input_fd since done writing
         
         // Wait for the child process to finish
         wait(NULL);
     }
 }
 
-
-
-
-/*
-void on_compile_compiler_button_clicked(GtkWidget *widget, gpointer data) {
-    GError *error = NULL;
-    gchar *output = NULL;
-    gint exit_status;
-
-    gchar *compile_command = "sh -c 'gcc userInput.c -o userInputProgram 2> compile_error.txt'";
-    g_spawn_command_line_sync(compile_command, &output, NULL, &exit_status, &error);
-
-    GtkTextBuffer *output_buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(output_view));
-    gchar *compile_output = NULL;
-    
-    FILE *file = fopen("compile_error.txt", "r");
-    if (file) {
-        fseek(file, 0, SEEK_END);
-        long length = ftell(file);
-        fseek(file, 0, SEEK_SET);
-        compile_output = malloc(length + 1);
-        fread(compile_output, 1, length, file);
-        compile_output[length] = '\0';
-        fclose(file);
-    }
-
-    if (exit_status != 0) {
-        gtk_text_buffer_set_text(output_buffer, compile_output ? compile_output : "Compilation error (no output)", -1);
-        save_output_to_file(compile_output ? compile_output : "Compilation error (no output)");
-        if (compile_output) g_free(compile_output);
-        return;
-    }
-
-    gtk_text_buffer_set_text(output_buffer, "", -1);
-    gchar *run_command = "sh -c './userInputProgram 2>&1'";
-    g_spawn_command_line_sync(run_command, &output, NULL, &exit_status, &error);
-
-    if (exit_status != 0) {
-        gtk_text_buffer_set_text(output_buffer, output ? output : "Runtime error (no output)", -1);
-        save_output_to_file(output ? output : "Runtime error (no output)");
-        g_free(output);
-        return;
-    }
-
-    gtk_text_buffer_set_text(output_buffer, output ? output : "Program executed successfully, no output.", -1);
-    save_output_to_file(output ? output : "Program executed successfully, no output.");
-    g_free(output);
-}
-
-*/
-
-/*void on_run_with_args_and_check(GtkWidget *widget, gpointer data) {
-    FILE *fp = fopen("privateTestCase.json", "r");
+void read_json_and_run_tests() {
+    FILE *fp = fopen("privateTestCase.json", "r"); // Update with your JSON filename
     if (fp == NULL) {
-        g_print("Private test case JSON doesn't exist.\n");
+        fprintf(stderr, "Error opening JSON file.\n");
         return;
     }
 
     char buffer[2048];
-    fread(buffer, sizeof(char), 2048, fp);
+    fread(buffer, sizeof(char), sizeof(buffer), fp);
     fclose(fp);
 
-    struct json_object *parsed_json;
-    parsed_json = json_tokener_parse(buffer);
-
+    struct json_object *parsed_json = json_tokener_parse(buffer);
     struct json_object *test_cases;
+    
     json_object_object_get_ex(parsed_json, "test_cases", &test_cases);
-
     int array_len = json_object_array_length(test_cases);
-    int done = 1;
+
     for (int i = 0; i < array_len; i++) {
         struct json_object *test_case = json_object_array_get_idx(test_cases, i);
         struct json_object *input_args;
@@ -181,36 +152,20 @@ void on_compile_compiler_button_clicked(GtkWidget *widget, gpointer data) {
         json_object_object_get_ex(test_case, "input", &input_args);
         json_object_object_get_ex(test_case, "expected_output", &expected_output);
 
-        gchar *input_str = g_strdup(json_object_get_string(input_args));
-        gchar *expected_str = g_strdup(json_object_get_string(expected_output));
+        const char *input_str = json_object_get_string(input_args);
+        const char *expected_str = json_object_get_string(expected_output);
 
-        g_print("Running with input: %s\n", input_str);
-        run_test_case(input_str);
-
-        gchar *output = NULL;
-        g_spawn_command_line_sync("cat userResult.txt", &output, NULL, NULL, NULL);
-
-        g_print("Your output: %s\n", output);
-        g_print("Expected output: %s\n", expected_str);
-        
-        const char* req = expected_str;
-        const char* out = output;
-        if (strncmp(req, out, strlen(req)) == 0) {
-            g_print("Test Case %d Passed!\n", i + 1);
-        } else {
-            if(done){done = 0;}
-            g_print("Test Case %d Failed!\n", i + 1);
-        }
-
-        g_free(input_str);
-        g_free(expected_str);
-        g_free(output);
+        printf("Running Test Case %d with input: %s\n", i + 1, input_str);
+        compile_and_run(input_str,expected_str);
     }
-    if(done == 1){
-        exit(250);
-    }
-    json_object_put(parsed_json);
-}*/
+    close(outputfd[0]);
+    write(outputfd[1],"exit",4);
+    json_object_put(parsed_json); // Clean up
+    close(outputfd[1]);
+    exit(0);
+}
+
+
 
 void monitor_child(){
 
@@ -221,11 +176,11 @@ void monitor_child(){
         ssize_t bytes_read = read(outputfd[0], buffer, sizeof(buffer));
         if (bytes_read > 0) {
             buffer[bytes_read] = '\0'; // Null-terminate the string
+            if(strcmp(buffer,"exit")==0){break;}
             int button_index;
             char *data;
 			//printf("Buffer caught: %s\n",buffer);
             // Parse the message
-            char *colon_pos = strchr(buffer, ':');
             char string[1024];
    
    	    	// Extract the number before the colon
@@ -253,7 +208,7 @@ void monitor_child(){
                     store_input_file(string);
                     break;
                 case 1:
-                    compile();
+                    read_json_and_run_tests();
                     break;
                 default:
                     printf("Unknown button index.\n");
@@ -331,7 +286,7 @@ void on_compile_and_run_button_clicked(GtkButton *button, gpointer user_data) {
     char buffer[2048];  // Buffer for output
     ssize_t bytes_read;
     
-    wait(10);
+    //wait(10);
     // Read from input_fd
     bytes_read = read(inputfd[0], buffer, sizeof(buffer) - 1);
     if (bytes_read > 0) {
@@ -352,42 +307,9 @@ void on_compile_and_run_button_clicked(GtkButton *button, gpointer user_data) {
         close(inputfd[0]);
         inputfd[0] = -1; // Set to -1 to avoid closing again
     }
+    
+    exit(250);
 }
-
-
-/*void on_compile_and_run_button_clicked(GtkWidget *widget, gpointer data) {
-    GError *error = NULL;
-    gchar *output = NULL;
-    gint exit_status;
-
-    gchar *command = "gcc output_program.c -o output_program";
-    g_spawn_command_line_sync(command, &output, NULL, &exit_status, &error);
-    
-    GtkTextBuffer *output_buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(output_view));
-    
-    if (exit_status != 0) {
-        gtk_text_buffer_set_text(output_buffer, output ? output : "Compilation error (no output)", -1);
-        g_free(output);
-        return;
-    }
-
-    gtk_text_buffer_set_text(output_buffer, "", -1);
-    command = "./output_program";
-    g_spawn_command_line_sync(command, &output, NULL, &exit_status, &error);
-    
-    if (error) {
-        gtk_text_buffer_set_text(output_buffer, error->message, -1);
-        g_error_free(error);
-        g_free(output);
-        return;
-    }
-
-    gtk_text_buffer_set_text(output_buffer, output ? output : "Program executed successfully, no output.", -1);
-    g_free(output);
-}
-*/
-
-
 
 int main(int argc, char* argv[]){
 
@@ -494,7 +416,15 @@ int main(int argc, char* argv[]){
         close(inputfd[0]);
         close(outputfd[1]);
         monitor_child();
-        wait(NULL);
+        int status;
+        waitpid(pid, &status, 0); // Wait for the child process to finish
+        if (WIFEXITED(status)) {
+            int exit_code = WEXITSTATUS(status);
+            printf("Exit code: %d",exit_code);
+            if(exit_code == 250){
+            	printf("\nAll test cases passed....\n");
+            }
+        }
 	}
 	
 	return 0;
