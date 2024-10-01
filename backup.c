@@ -26,20 +26,11 @@ void store_input_file(char* input) {
 }
 
 
-void test_output(const char *output, const char *expected_output) {
-    if (strncmp(expected_output, output, strlen(expected_output)) == 0) {
-        printf("Test Case Passed!\n");
-        printf("Your output: %s\n", output);
-        printf("Expected output: %s\n", expected_output);
-    } else {
-        printf("Test Case Failed!\n");
-        printf("Your output: %s\n", output);
-        printf("Expected output: %s\n", expected_output);
-    }
-}
 
-
-char* compile_and_run(const char *input_value,const char* file_name) {
+int compile_and_run(const char *input_value, const char *expected_output) {
+    
+    
+    
     int output_pipe[2]; // Pipe for standard output
     int error_pipe[2];  // Pipe for standard error
     int input_pipe[2];  // Pipe for standard input
@@ -78,15 +69,17 @@ char* compile_and_run(const char *input_value,const char* file_name) {
 
         // Execute the command to compile and run the program
         char command[1024];
-        snprintf(command, sizeof(command), "rm -f %s; gcc %s.c -o %s; ./%s",file_name,file_name,file_name,file_name);
+        snprintf(command, sizeof(command), "rm -f userInput; gcc userInput.c -o userInput; ./userInput");
 
         // Start the command using execlp
         execlp("sh", "sh", "-c", command, NULL);
-
+        
         // If execlp fails
         perror("execlp");
         exit(EXIT_FAILURE);
-    } else { // Parent process
+    } else { 
+    
+    	// Parent process
         // Close write ends of pipes
         close(output_pipe[1]);
         close(error_pipe[1]);
@@ -113,31 +106,38 @@ char* compile_and_run(const char *input_value,const char* file_name) {
             error_buffer[bytes_read + strlen(error_buffer)] = '\0'; 
         }
 
-        // Close read ends
-        close(output_pipe[0]);
-        close(error_pipe[0]);
-
-        // Wait for the child process to finish
-        wait(NULL);
-
-        // Combine output and error messages (optional)
+        // Combine output and error messages
         char combined_output[2048]; // Adjust size as needed
         snprintf(combined_output, sizeof(combined_output), "%s\n%s", output_buffer, error_buffer);
-        char* data_out = combined_output;
-        return data_out;
-        // Return the output buffer for further processing
-        //return strdup(output_buffer); // Make sure to free this in the caller
+       // printf("From fn call:\n%s\n", combined_output);
+       int done;
+        // Check the output against expected output
+        if (strncmp(expected_output, output_buffer, strlen(expected_output)) == 0) {
+            printf("Test Case Passed!\n");
+            printf("Your output: %s\n", output_buffer);
+            printf("Expected output: %s\n", expected_output);
+            done = 1;
+        } else {
+            printf("Test Case Failed!\n");
+            printf("Your output: %s\n", output_buffer);
+            printf("Expected output: %s\n", expected_output);
+        	done = 0;
+        }
+
+        // Close read ends
+        write(inputfd[1],combined_output,strlen(combined_output));
+        //close(inputfd[1]);
+        close(output_pipe[0]);
+        close(error_pipe[0]);
+        
+        // Wait for the child process to finish
+        wait(NULL);
+        return done;
     }
 }
 
+void run_custom_input(){
 
-
-void run_custom_input(const char* input_str){
-	char* output_str = compile_and_run(input_str,"userInput");
-    char* expected_str = compile_and_run(input_str,"answer");
-	test_output(output_str,expected_str);
-	
-	
 }
 
 void read_json_and_run_tests() {
@@ -168,11 +168,11 @@ void read_json_and_run_tests() {
         json_object_object_get_ex(test_case, "expected_output", &expected_output);
 
         const char *input_str = json_object_get_string(input_args);
-        char *expected_str = compile_and_run(input_str,"answer");
+        const char *expected_str = json_object_get_string(expected_output);
 
         printf("Running Test Case %d with input: %s\n", i + 1, input_str);
-        char* output_str = compile_and_run(input_str,"userInput");
-        test_output(output_str,expected_str);
+        int ret = compile_and_run(input_str,expected_str);
+        done = done&&ret;
     }
     //write(inputfd[1],"exit",strlen("exit"));
     //close(inputfd[1]);
@@ -218,6 +218,7 @@ void monitor_child(){
         		}
         	}
         	// Copy everything after the colon (including whitespace)
+        	//strncpy(data, colon_pos + 1, sizeof(data) - 1);
             //sscanf(buffer, "%d:%s", &button_index, data);
             //printf("%d clicked\n",button_index);
             // Process the data based on button index
@@ -229,7 +230,7 @@ void monitor_child(){
                     read_json_and_run_tests();
                     break;
                	case 2:
-               		run_custom_input(string);
+               		run_custom_input();
                		break;
                 default:
                     printf("Unknown button index.\n");
@@ -351,69 +352,88 @@ void on_compile_and_run_button_clicked(GtkButton *button, gpointer user_data) {
 
 /////////////////// WORKING ON THIS ////
 
+
+void check_data(){
+
+}
+
+
 void on_run_button_clicked(GtkWidget *widget, gpointer data) {
-    GtkTextBuffer *Gbuffer;
+    GtkTextBuffer *buffer;
     GtkTextIter start, end;
     gchar *text;
 
     // Get the buffer associated with the custom output text view (below custom input box)
-    Gbuffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(custom_output_text_view));
+    buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(custom_output_text_view));
     
     // Get the start and end iterators for the text
-    gtk_text_buffer_get_start_iter(Gbuffer, &start);
-    gtk_text_buffer_get_end_iter(Gbuffer, &end);
+    gtk_text_buffer_get_start_iter(buffer, &start);
+    gtk_text_buffer_get_end_iter(buffer, &end);
 
     // Extract the text within the iterators
-    text = gtk_text_buffer_get_text(Gbuffer, &start, &end, FALSE);
+    text = gtk_text_buffer_get_text(buffer, &start, &end, FALSE);
 
     // Print or use the retrieved text as needed
     //printf("Custom Input Text: %s\n", text);
     int button_index = GPOINTER_TO_INT(data);
     char *trimmed_input = g_strstrip(text);
-   
+    
+    int pipefd[2];
+    pid_t cpid;
+    char buffer[1024];
+    ssize_t nbytes;
+
+    // Create a pipe
+    if (pipe(pipefd) == -1) {
+        perror("pipe");
+        return;
+    }
+
+    // Fork the process
+    cpid = fork();
+    if (cpid == -1) {
+        perror("fork");
+        return;
+    }
+
+    if (cpid == 0) { // Child process
+        // Close the read end of the pipe
+        close(pipefd[0]);
+
+        // Redirect stdout to the pipe
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]); // Close original write end after redirecting
+
+        // Execute the answer.c file (make sure it's compiled first)
+        execlp("./answer", "answer", (char *) NULL);
+
+        // If execlp fails
+        perror("execlp");
+        exit(EXIT_FAILURE);
+    } else { // Parent process
+        // Close the write end of the pipe
+        close(pipefd[1]);
+
+        // Read the output from the pipe
+        while ((nbytes = read(pipefd[0], buffer, sizeof(buffer) - 1)) > 0) {
+            buffer[nbytes] = '\0'; // Null-terminate the string
+            printf("Output from answer.c: %s", buffer);
+            // You can also display this output in your GTK TextView if needed
+        }
+
+        // Close the read end of the pipe
+        close(pipefd[0]);
+
+        // Wait for the child process to finish
+        wait(NULL);
+    }
     
     // Prepare the message to send (e.g., "index:data")
     char message[1024];
     snprintf(message, sizeof(message), "%d:%s", button_index, trimmed_input);
-    printf("%s",message);
-    
     write(outputfd[1], message, strlen(message) + 1);
     
     
-    
-    //Reading the output sent
-    
-    char buffer[2048];  // Buffer for output
-    ssize_t bytes_read;
-    
-    //wait(10);
-    // Read from input_fd
-   	bytes_read = read(inputfd[0], buffer, sizeof(buffer) - 1);
-    	//buffer[bytes_read]='\0';
-    	//printf("To the UI: %s",buffer);
-    	
-    if (bytes_read > 0) {
-        buffer[bytes_read] = '\0'; // Null-terminate the string
-        GtkTextBuffer *text_buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(custom_output_text_view));
-        gtk_text_buffer_set_text(text_buffer, buffer, -1);
-        
-    } else if (bytes_read == -1) {
-        perror("read from input_fd failed");  // Handle read error
-        GtkTextBuffer *text_buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(output_view));
-        gtk_text_buffer_set_text(text_buffer, "Error reading from input_fd.", -1);
-    } else {
-        GtkTextBuffer *text_buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(output_view));
-        gtk_text_buffer_set_text(text_buffer, "No output received.", -1);
-    }
-    
-    	//if(!stop){break;}
-    
-
-    // Close the read end of input_fd after usage
-    if (inputfd[0] != -1) {
-        close(inputfd[0]);
-        inputfd[0] = -1; // Set to -1 to avoid closing again
-    }
     // Free the retrieved text (important to avoid memory leak)
     g_free(text);
     
